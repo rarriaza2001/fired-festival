@@ -227,7 +227,9 @@ export interface PreparedReviewInput extends ReviewInput {
   readonly context_triage?: ContextTriage;
 }
 
-const LINK_PROMPT_CHARS = 12_000;
+const LINK_PROMPT_CHARS = 4_000;
+const MAX_ATTACHMENT_BODY_CHARS = 12_000;
+const MAX_PRIOR_JSON_CHARS = 18_000;
 
 function contextBodyForPrompt(item: IngestedContextItem): string | null {
   if (item.kind === 'link' && item.extracted_text && item.status === 'parsed') {
@@ -240,16 +242,31 @@ function contextBodyForPrompt(item: IngestedContextItem): string | null {
   return null;
 }
 
-function attachmentContextBlock(prepared: PreparedReviewInput): string {
+function attachmentContextBlock(
+  prepared: PreparedReviewInput,
+  includeBodies: boolean,
+): string {
   if (!prepared.ingested_items?.length) return '';
 
+  let bodyBudget = MAX_ATTACHMENT_BODY_CHARS;
   const ingestionLines = prepared.ingested_items.map((item) => {
     const warn = item.warnings.map((w: string) => `      - ${w}`).join('\n');
+    let body: string | null = null;
+    if (includeBodies && bodyBudget > 0) {
+      body = contextBodyForPrompt(item);
+      if (body) {
+        bodyBudget -= body.length;
+        if (bodyBudget < 0) {
+          body = body.slice(0, body.length + bodyBudget) + '\n    ... [truncated]';
+          bodyBudget = 0;
+        }
+      }
+    }
     return [
       `  - ${item.label} (${item.kind}, ${item.status})`,
       `    ref: ${item.ref}`,
       warn ? `    warnings:\n${warn}` : null,
-      contextBodyForPrompt(item),
+      body,
     ]
       .filter(Boolean)
       .join('\n');
@@ -271,11 +288,24 @@ function attachmentContextBlock(prepared: PreparedReviewInput): string {
     .join('\n');
 }
 
-function decisionBlock(input: PreparedReviewInput): string {
+function decisionBlock(input: PreparedReviewInput, includeAttachmentBodies: boolean): string {
   const items = input.context_items.length
     ? `\n\nSubmitted context refs:\n${input.context_items.map((c) => `- ${c.label} (${c.kind}): ${c.ref}`).join('\n')}`
     : '';
-  return `User's decision (verbatim):\n"""\n${input.text}\n"""${items}${attachmentContextBlock(input)}`;
+  return `User's decision (verbatim):\n"""\n${input.text}\n"""${items}${attachmentContextBlock(input, includeAttachmentBodies)}`;
+}
+
+const STAGES_WITH_FULL_ATTACHMENT_TEXT: ReadonlySet<StageKey> = new Set([
+  'sufficiency',
+  'artifact',
+  'scope',
+  'assumptions',
+  'evidence',
+]);
+
+function cappedPriorJson(json: string): string {
+  if (json.length <= MAX_PRIOR_JSON_CHARS) return json;
+  return `${json.slice(0, MAX_PRIOR_JSON_CHARS)}\n... [prior JSON truncated for context limit]`;
 }
 
 export interface StagePrompt {
@@ -295,9 +325,10 @@ export function buildPrompt(
   const system = `${PERSONA}\n\n${INSTRUCTIONS[key]}\n\n${VALIDATION_LINK_RULE}${DEDUP_RULE}${JSON_RULE}`;
   // The first two stages (sufficiency, artifact) see only the raw decision;
   // later stages also receive the accumulated prior results.
+  const includeAttachmentBodies = STAGES_WITH_FULL_ATTACHMENT_TEXT.has(key);
   const isFirstPass = key === 'sufficiency' || key === 'artifact';
   const user = isFirstPass
-    ? decisionBlock(input)
-    : `${decisionBlock(input)}\n\nReview progress so far (JSON):\n${priorJson}`;
+    ? decisionBlock(input, includeAttachmentBodies)
+    : `${decisionBlock(input, includeAttachmentBodies)}\n\nReview progress so far (JSON):\n${cappedPriorJson(priorJson)}`;
   return { system, user };
 }

@@ -7,6 +7,11 @@ import type { ChatMessage, CompletionRequest } from '../providers/provider.types
 import type { Byok, StructuredResult } from './llm.types';
 import { zodToAnthropicJsonSchema } from './anthropic-json-schema';
 import { parseJsonObject } from './json-extract';
+import {
+  capMaxTokensForContext,
+  maxTokensAfterContextError,
+  parseAnthropicContextLimitError,
+} from './token-budget';
 
 const MAX_ERROR_ISSUES = 6;
 
@@ -44,20 +49,28 @@ export class StructuredLlmService {
     const buildRequest = (
       messages: ReadonlyArray<ChatMessage>,
       withStructured: boolean,
+      tokenBudget: number,
     ): CompletionRequest => ({
       model: byok.model,
       system,
       messages,
-      maxTokens,
+      maxTokens: tokenBudget,
       ...(byok.providerName !== 'anthropic' ? { temperature: 0 } : {}),
       ...(withStructured && responseFormat
         ? { responseFormat: { type: 'json_schema', schema: responseFormat.schema } }
         : {}),
     });
 
+    const budgetFor = (messages: ReadonlyArray<ChatMessage>): number =>
+      byok.providerName === 'anthropic'
+        ? capMaxTokensForContext(system, messages, maxTokens)
+        : maxTokens;
+
     const ask = async (messages: ReadonlyArray<ChatMessage>, structured: boolean) => {
+      const tokenBudget = budgetFor(messages);
+      const request = buildRequest(messages, structured, tokenBudget);
       try {
-        return await adapter.complete(buildRequest(messages, structured), byok.apiKey);
+        return await adapter.complete(request, byok.apiKey);
       } catch (error: unknown) {
         if (
           structured &&
@@ -66,7 +79,20 @@ export class StructuredLlmService {
           error.status === 400 &&
           /schema|too complex|output_config|format/i.test(error.message)
         ) {
-          return adapter.complete(buildRequest(messages, false), byok.apiKey);
+          return adapter.complete(buildRequest(messages, false, tokenBudget), byok.apiKey);
+        }
+        if (
+          useAnthropicStructured &&
+          error instanceof ProviderError &&
+          error.status === 400
+        ) {
+          const ctx = parseAnthropicContextLimitError(error.message);
+          if (ctx) {
+            const reduced = maxTokensAfterContextError(ctx, maxTokens);
+            if (reduced < tokenBudget) {
+              return adapter.complete(buildRequest(messages, structured, reduced), byok.apiKey);
+            }
+          }
         }
         throw error;
       }

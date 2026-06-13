@@ -1,9 +1,6 @@
 import type { ZodType, ZodTypeDef } from 'zod';
 import type { AgentAction } from '@dgb/shared';
-import {
-  DEFAULT_MAX_OUTPUT_TOKENS,
-  HEAVY_STAGE_MAX_OUTPUT_TOKENS,
-} from '@dgb/shared';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '@dgb/shared';
 import {
   buildPrompt,
   STAGE_SCHEMAS,
@@ -40,13 +37,6 @@ import { isPredictiveClaim, buildBaseRateQuery } from './base-rate';
  * into the accumulator under the same StageKey so downstream prompts are byte
  * identical to the orchestrator's.
  */
-const STAGE_MAX_OUTPUT_TOKENS: Partial<Record<StageKey, number>> = {
-  assumptions: 6144,
-  evidence: HEAVY_STAGE_MAX_OUTPUT_TOKENS,
-  realityRisks: HEAVY_STAGE_MAX_OUTPUT_TOKENS,
-  nextAction: 6144,
-};
-
 const STAGE_ACTION_KEY = {
   assess_sufficiency: 'sufficiency',
   extract_artifact: 'artifact',
@@ -111,7 +101,7 @@ export async function runStageAction(
     schema,
     prompt.system,
     prompt.user,
-    STAGE_MAX_OUTPUT_TOKENS[stageKey] ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
   );
   return { stageKey, data: result.data, costUsd: result.costUsd ?? 0 };
 }

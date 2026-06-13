@@ -1,6 +1,12 @@
 import { Controller, Get, Param, Query, NotFoundException } from '@nestjs/common';
-import { runMetricsSchema, type RunMetrics, type TraceEvent } from '@dgb/shared';
+import {
+  runMetricsSchema,
+  type RunMetrics,
+  type MetricsSummary,
+  type TraceEvent,
+} from '@dgb/shared';
 import { PrismaService } from '../persistence/prisma.service';
+import { summarizeRunMetrics } from '../metrics/metrics-builder';
 import { traceRowToEvent } from '../trace/trace-row';
 
 const DEFAULT_LIMIT = 50;
@@ -70,6 +76,16 @@ export class TelemetryController {
       orderBy: { review: { createdAt: 'desc' } },
     });
     return rows.map(metricRowToRunMetrics);
+  }
+
+  /**
+   * Aggregate observability rollup across every recorded run. Declared before
+   * `metrics/:runId` so the static path is not captured as a run id.
+   */
+  @Get('metrics/summary')
+  async getMetricsSummary(): Promise<MetricsSummary> {
+    const rows = await this.prisma.metric.findMany();
+    return summarizeRunMetrics(rows.map(metricRowToRunMetrics));
   }
 
   /** The metric rollup for one run. */

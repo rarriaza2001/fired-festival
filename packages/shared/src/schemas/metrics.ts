@@ -34,3 +34,58 @@ export const runMetricsSchema = z.object({
 });
 
 export type RunMetrics = z.infer<typeof runMetricsSchema>;
+
+/**
+ * Distribution of one numeric metric across runs. Percentiles use the
+ * nearest-rank method (p95 is the smallest sample at or above the 95th
+ * percentile), which is the meaningful view for tail latency and cost.
+ */
+export const metricDistributionSchema = z.object({
+  /** Number of runs that contributed a value to this distribution. */
+  count: z.number().int().min(0),
+  avg: z.number().nonnegative(),
+  p50: z.number().nonnegative(),
+  p95: z.number().nonnegative(),
+  p99: z.number().nonnegative(),
+  max: z.number().nonnegative(),
+});
+
+export type MetricDistribution = z.infer<typeof metricDistributionSchema>;
+
+/**
+ * Aggregate observability rollup across many runs. Served by
+ * `GET /telemetry/metrics/summary` so an operator can read fleet-wide health in
+ * one call instead of paging the per-run list. It mirrors the established OTel
+ * instruments: run counts by terminal state and eval result, plus distributions
+ * (avg + p50/p95/p99/max) for the speed, cost, and boundedness histograms.
+ *
+ * Breakdowns are counts keyed by label. `eval_result` and
+ * `final_review_confidence` count only runs that produced that value, so their
+ * counts can sum to fewer than `total_runs`. `cost_usd` covers only runs with a
+ * recorded cost (`count` reports how many).
+ */
+export const metricsSummarySchema = z.object({
+  total_runs: z.number().int().min(0),
+  // Speed
+  duration_ms: metricDistributionSchema,
+  // Cost (over runs with a recorded cost)
+  cost_usd: metricDistributionSchema.extend({
+    total: z.number().nonnegative(),
+  }),
+  // Boundedness
+  loop_count: metricDistributionSchema,
+  tool_call_count: metricDistributionSchema,
+  max_loop_reached_count: z.number().int().min(0),
+  // Reliability (totals across all runs)
+  retry_count: z.number().int().min(0),
+  clarification_count: z.number().int().min(0),
+  guardrail_triggers: z.number().int().min(0),
+  // Quality / boundedness breakdowns (counts keyed by label)
+  terminal_state: z.record(z.string(), z.number().int().min(0)),
+  eval_result: z.record(z.string(), z.number().int().min(0)),
+  final_review_confidence: z.record(z.string(), z.number().int().min(0)),
+  search_depth: z.record(z.string(), z.number().int().min(0)),
+  cost_accuracy: z.record(z.string(), z.number().int().min(0)),
+});
+
+export type MetricsSummary = z.infer<typeof metricsSummarySchema>;

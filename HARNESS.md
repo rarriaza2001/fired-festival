@@ -89,7 +89,38 @@ The API is `GET /reviews/:id/checkpoints` to list resume points and `POST /revie
 
 A single trace spine, `phase8.v1` in `@dgb/shared/constants/trace-events.ts`, records every state change and the reason for it. That includes each loop turn (`agent_turn_started`, `action_selected`, `action_executed`, `agent_terminated`), every stage, every tool call, every confidence change, every guardrail trigger, every reassessment loop, every alarm, and the terminal event. The trace records decisions and reasons, not hidden chain-of-thought.
 
-`TraceService` persists every event. An OpenTelemetry bridge in `apps/api/src/telemetry/` exports spans and metrics; it is additive, fail-safe, and off unless you set `OTEL_ENABLED=true`. Read the data at `GET /telemetry/traces/:runId`, `GET /telemetry/metrics/:runId`, and `GET /telemetry/alarms/:runId`.
+`TraceService` persists every event. An OpenTelemetry bridge in `apps/api/src/telemetry/` exports spans and metrics; it is additive, fail-safe, and off unless you set `OTEL_ENABLED=true`. Read the data at `GET /telemetry/traces/:runId`, `GET /telemetry/metrics/:runId`, and `GET /telemetry/alarms/:runId`. These read APIs work whether or not the OTel export is on, because they read the persisted tables.
+
+### Fleet-wide metrics: `GET /telemetry/metrics/summary`
+
+This route returns one aggregate rollup across every recorded run, so you can read fleet health in a single call instead of paging the per-run list. It mirrors the established instruments. Count breakdowns cover terminal state, eval result, final confidence, search depth, and cost accuracy. Distributions report the average plus p50, p95, p99, and max for duration, cost, loop count, and tool calls. Reliability totals cover retries, clarifications, guardrail triggers, and the number of runs that hit the loop cap.
+
+```json
+{
+  "total_runs": 142,
+  "duration_ms":     { "count": 142, "avg": 18450, "p50": 16200, "p95": 41800, "p99": 58000, "max": 61000 },
+  "cost_usd":        { "count": 138, "avg": 0.093, "p50": 0.081, "p95": 0.21, "p99": 0.28, "max": 0.31, "total": 12.84 },
+  "loop_count":      { "count": 142, "avg": 0.4, "p50": 0, "p95": 1, "p99": 2, "max": 3 },
+  "tool_call_count": { "count": 142, "avg": 1.2, "p50": 1, "p95": 4, "p99": 6, "max": 8 },
+  "max_loop_reached_count": 3,
+  "retry_count": 7,
+  "clarification_count": 9,
+  "guardrail_triggers": 38,
+  "terminal_state": { "review_complete": 130, "failed": 4, "refused": 8 },
+  "eval_result": { "pass": 110, "weak": 25, "fail": 7 },
+  "final_review_confidence": { "High": 40, "Medium": 78, "Low": 12 },
+  "search_depth": { "no_search": 90, "shallow_search": 40, "deep_search": 12 },
+  "cost_accuracy": { "exact": 100, "estimated": 38, "unknown": 4 }
+}
+```
+
+Three behaviors to know when you read it:
+
+- Percentiles use the nearest-rank method, so p95 is the smallest sample at or above the 95th percentile. There is no interpolation inventing a value between two runs.
+- The cost distribution covers only runs that recorded a cost, and `count` tells you how many. A null cost means unknown, not zero, so folding it in would drag every percentile down. `total` still sums every recorded cost.
+- Turn count and the per-run action mix are not in this aggregate. They live on the `agent_terminated` trace event and the `run_metrics` log line, because the persisted `Metric` table does not carry a turn-count column.
+
+With no runs recorded yet, the route returns the empty rollup (`total_runs: 0`, empty breakdowns, zeroed distributions), not a 404.
 
 ## Running it
 
