@@ -1,0 +1,25 @@
+# Keep the build context small and reproducible.
+**/node_modules
+**/dist
+**/.next
+**/out
+**/*.tsbuildinfo
+
+# Local databases & secrets — never ship these into the image.
+**/*.db
+**/*.db-journal
+**/.env
+**/.env.local
+**/.env.*.local
+apps/api/storage
+
+# Logs, coverage, tooling noise.
+**/*.log
+**/coverage
+**/.nyc_output
+**/playwright-report
+**/test-results
+.git
+.idea
+.vscode
+**/.DS_Store

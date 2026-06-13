@@ -1,0 +1,206 @@
+================================================================================
+AGENTIC-HARNESS ADAPTATION — WHAT CHANGED VS. THE ORIGINAL PLANNED SCOPE
+Project: "Don't Go Blind" (Decision Stress-Tester)
+Report date: 2026-06-13
+Source plan: AGENTIC-HARNESS-PLAN.md (§5 module layout, §7 phasing, §8 acceptance)
+================================================================================
+
+PURPOSE OF THIS REPORT
+----------------------
+The plan committed to two non-negotiable bars (§8):
+  A. Functionality preserved — every existing spec green/unchanged, all 21 eval
+     verdicts identical, same reviewOutputSchema, same terminal states.
+  B. Agentic-harness classification — model-directed control loop over a typed
+  
+     action space, with state, observation, termination/budgets, guardrail
+     interceptors, tool use, and observability.
+
+Both bars are still met. This document records where the *implementation*
+departed from the plan's prescribed file/phase layout, and what was traded off
+to get there. Nothing below changes product behavior — the deviations are
+structural (where code lives, how phases were sequenced), not behavioral.
+
+A NOTE ON "8 PHASES"
+--------------------
+The written plan (§7) enumerates Phase 0 through Phase 6 = seven phases. The work
+was executed and is reported against those exact phase numbers. If you were
+counting the §8 "Acceptance" gate as a final phase, that maps to Phase 6 (Verify)
+here. No planned phase was dropped; the count difference is labeling only.
+
+================================================================================
+1. WHAT CHANGED FROM THE PLANNED MODULE LAYOUT (§5)
+================================================================================
+
+The plan's §5 prescribed this agent/ module set:
+    agent-runner.service.ts, action-space.ts, action-handlers.ts,
+    agent-state.ts, observation.ts, agent-decision.ts, termination.ts,
+    policy.ts, agent.module.ts
+
+What we actually shipped in apps/api/src/agent/:
+    agent-runner.service.ts   (control loop + all post-processing)
+    agent-decider.ts          (pure per-turn decision selector)   <-- renamed/rescoped
+    action-space.ts           (legal-action computation)
+    action-handlers.ts        (thin stage/tool wrappers)
+    agent-state.ts            (immutable working memory)
+    observation.ts            (observation formatter for the model)
+    termination.ts            (budgets + stop conditions)
+    policy.ts                 (forced-action / precondition policy)
+    + matching *.spec.ts for each
+
+DEVIATION 1 — "agent-decision.ts" became "agent-decider.ts" (rescoped)
+    Planned: one module holding the decision PROMPT + schema + selection.
+    Shipped: the decision SCHEMA lives in @dgb/shared/schemas/agent.ts
+             (agentDecisionSchema, single source of truth, as the plan demanded
+             for contracts); the decision PROMPT lives as the PERSONA_FOR_DECISION
+             constant inside the runner; and the pure SELECTION logic ("model
+             proposes, harness disposes", with forced/model/fallback precedence)
+             is agent-decider.ts.
+    Why: keeping the schema in @dgb/shared honored the plan's "shared = single
+         source of truth, do first" rule; splitting selection into a pure,
+         framework-free module made it unit-testable without Nest (8 dedicated
+         tests). The prompt is co-located with the only caller that uses it.
+    Sacrifice: there is no single file named "agent-decision.ts"; a reader
+         looking for it must know the three pieces were separated by concern.
+
+DEVIATION 2 — no standalone "agent.module.ts"
+    Planned: a dedicated Nest module for the harness.
+    Shipped: AgentRunner is registered directly in review.module.ts providers
+             (alongside ReviewOrchestrator), reusing that module's existing
+             imports (LlmModule, TraceModule, ToolsModule, EvalModule,
+             MetricsModule) which already supply every dependency the runner needs.
+    Why: a separate module would have re-imported the same five feature modules
+         and risked provider duplication; the runner is only ever consumed by the
+         review feature, so co-locating its registration is simpler (KISS/YAGNI).
+    Sacrifice: the harness is not packaged as its own DI module, so it is
+         marginally less isolated/portable if it ever needs to be consumed
+         outside the review feature. Low risk today; easy to extract later.
+
+DEVIATION 3 — agent-runner.service.ts is 1010 lines (over the 800-line guideline)
+    The runner absorbed ALL post-processing the old orchestrator performed —
+    intake routing, the external-check drain, the confidence cap, the pre-output
+    guardrail checklist, the bounded reassessment loop, evaluation, metrics, and
+    every trace emit — so that behavior would be byte-for-byte equivalent and the
+    diff would be auditable in one place against the old spine.
+    Sacrifice: this breaks the personal coding-style "800 lines max" rule. It is
+         the single largest structural debt from this adaptation. It is flagged
+         as the primary Phase 5 refactor candidate (extract the guardrail-loop and
+         finalize/terminal blocks into helper modules) — deferred deliberately
+         until after the agent path was proven equivalent, exactly as §7 Phase 5
+         instructs ("remove dead workflow-only code only after the agent path is
+         proven equivalent").
+
+================================================================================
+2. WHAT CHANGED IN THE PHASE SEQUENCING (§7)
+================================================================================
+
+DEVIATION 4 — trace-event EMISSION moved from Phase 4 into Phase 3
+    Plan put "emit agent trace events" in Phase 4 (Visibility). In practice the
+    runner could not run without emitting them, so all four new events
+    (agent_turn_started, action_selected, action_executed, agent_terminated)
+    were wired during the Phase 3 cutover.
+    Effect: Phase 4 shrank to *web rendering only* — the backend already produces
+            the events; the frontend just had to display the user_visible ones
+            (action_selected, agent_terminated). No work lost, only resequenced.
+
+DEVIATION 5 — Phase 3 took on the orchestrator gutting in full
+    The plan allowed an incremental cutover. We did the full replace in one pass:
+    review-orchestrator.service.ts went from a ~678-line hardcoded spine to a
+    27-line delegator to AgentRunner.run(). Public signature is unchanged, so
+    review.controller.ts, the HTTP API, and the web contract were untouched —
+    matching the plan's "contract identical" requirement.
+
+================================================================================
+3. WHAT WE DID *NOT* SACRIFICE (the invariants held)
+================================================================================
+
+  * Functionality (Bar A): 228/228 API tests pass (225 prior + 3 new
+    actionHistogram tests), all original specs unchanged.
+    The 21 eval cases keep their verdicts — guaranteed structurally, because the
+    eval harness scores evaluateStructure() on pure ReviewOutput fixtures and
+    never runs the agent loop, so a model-chosen action order cannot move a
+    verdict.
+  * reviewOutputSchema, terminal states, and the trace vocabulary: unchanged.
+  * Guardrails / tools / loop / intake / eval / metrics modules: invoked by the
+    runner, never modified (logic byte-identical; their specs stay green).
+  * Protection: "the model proposes, the harness disposes" — legalActions()
+    gates every choice, finalize is blocked until completeness, budgets bound
+    turns/tool-calls/cost, illegal/erroring proposals fall back deterministically.
+  * BYOK key: still per-request only, never persisted or logged.
+
+================================================================================
+4. NET SACRIFICE LEDGER (the honest list)
+================================================================================
+
+  [Structural] agent-runner.service.ts exceeds the 800-line file guideline
+               (1010 lines). -> Phase 5 extraction candidate. HIGHEST debt.
+  [Structural] No dedicated agent NestModule; registered in review.module.ts.
+               -> Lower portability; acceptable while single-consumer.
+  [Structural] Planned "agent-decision.ts" split across @dgb/shared schema +
+               runner persona constant + agent-decider.ts. -> Slight findability
+               cost; better separation of concerns.
+  [Process]    Trace emission landed in Phase 3, not Phase 4. -> No loss.
+
+  [Behavioral] NONE. No product behavior, output contract, guardrail, loop,
+               budget, intake rule, or eval verdict was changed or weakened.
+
+================================================================================
+5. PHASE STATUS (updated — all phases complete)
+================================================================================
+
+  Phase 4 (Visibility): DONE. trace-stream.tsx renders action_selected (chosen
+           action + "agent chose / only legal step / harness default" source tag
+           + rationale) and agent_terminated (stop reason + turn/tool totals),
+           reusing the home-screen classes (.tag/.tag.detail/.trace-detail) so it
+           matches the existing UI exactly. apps/web typecheck clean.
+  Phase 5 (Eval/metrics): DONE (scope-trimmed). Turn count + action histogram
+           added as harness OBSERVABILITY — pure actionHistogram() helper
+           (3 new tests) + the run_metrics structured log line + RunSignals
+           injected once in the runner. Deliberately NOT persisted to the Prisma
+           Metric table (would require a DB migration; the per-turn data is
+           already persisted on the agent_terminated trace event). Dead-code scan:
+           no orphaned workflow modules — stage-prompts / loop-controller /
+           guardrail-checklist / intake-controller all still have live importers
+           in the agent runner/handlers; strict typecheck confirms no dead imports.
+           The 1010-line runner split remains a deferred refactor candidate.
+  Phase 6 (Verify): DONE. `pnpm -r typecheck` clean across shared + api + web;
+           228/228 API tests green; planning.md updated with the harness
+           architecture section; CLAUDE.md added. (`pnpm -r test` reports a
+           failure ONLY because @dgb/shared has a test script but ships no spec
+           files — pre-existing scaffolding quirk, not a regression; all specs
+           live in @dgb/api.)
+
+  NET REMAINING (optional, non-blocking): split agent-runner.service.ts below the
+  800-line guideline; optionally add a Prisma migration to persist turn_count +
+  action_histogram to the Metric rollup table; optionally extract a dedicated
+  agent NestModule.
+================================================================================
+
+================================================================================
+POST-HARNESS ADDITION — OpenTelemetry export bridge (additive)
+================================================================================
+
+  WHAT: A new apps/api/src/telemetry/ module exports the existing phase8.v1
+  trace + metrics over OpenTelemetry, reachable via HTTP endpoints (hackathon
+  ask: "ensure it's reachable through an endpoint", no auth). NOT in the
+  original plan — OTel was never specified; the system always used the custom
+  phase8.v1 model + JSON logger. This layer is purely additive.
+
+  HOW (invariant-safe):
+    * Off by default — gated on OTEL_ENABLED (default false). With it off the
+      252-test suite and runtime behavior are unchanged.
+    * The locked metrics/ module is NOT modified — the onMetrics() tap lives in
+      the runner (safeRecordMetrics), which already receives the returned
+      RunMetrics. The trace tap is one fail-safe line at TraceService.emit
+      (trace/ is not on the locked list). Both bridge calls are wrapped so a
+      telemetry error can never break a review.
+    * trace.service.ts also had its private row->event reconstruction extracted
+      to a shared pure helper (trace/trace-row.ts), reused by the read API.
+
+  ACCESS (OTEL_ENABLED=true): Prometheus metrics at :9464/metrics; JSON rollups
+  at /telemetry/metrics[/:runId]; full trace at /telemetry/traces/:runId (the
+  JSON endpoints read persisted tables and work even with OTel off); optional
+  OTLP push via OTEL_EXPORTER_OTLP_ENDPOINT.
+
+  TESTS: +12 (span-mapper x7, telemetry.service x5 via InMemorySpanExporter,
+  incl. a disabled-mode no-op assertion). pnpm -r typecheck clean.
+================================================================================

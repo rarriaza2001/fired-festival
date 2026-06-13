@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Env & secrets (BYOK — keys never committed)
+.env
+.env.local
+.env.*.local
+
+# Databases
+*.db
+*.db-journal
+apps/api/prisma/dev.db
+apps/api/prisma/migrations/dev.db
+apps/api/storage/
+
+# Logs
+*.log
+logs/
+
+# Test / coverage
+coverage/
+playwright-report/
+test-results/
+.nyc_output/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local agent/tooling settings (machine-specific)
+.claude/settings.local.json

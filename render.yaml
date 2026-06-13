@@ -1,0 +1,35 @@
+# Render Blueprint — one free Docker web service running both the Next.js UI and
+# the Nest API. Deploy: push to GitHub, then Render Dashboard -> New -> Blueprint
+# and point it at this repo. Set the LLM key(s) when prompted (sync:false).
+#
+# Free tier notes for judges:
+#   - The service sleeps after ~15 min idle; first hit cold-starts (~50s).
+#   - SQLite is on ephemeral disk and resets on redeploy/restart (demo-fine).
+services:
+  - type: web
+    name: dont-go-blind
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      # SQLite on the ephemeral container disk.
+      - key: DATABASE_URL
+        value: file:/app/data/dgb.db
+      # model_only avoids any outbound web tooling; flip to "network" only if you
+      # also set BRAVE_SEARCH_API_KEY.
+      - key: TOOL_MODE
+        value: model_only
+      - key: LOG_LEVEL
+        value: info
+      # --- Secrets: set these in the Render dashboard (never committed) ---
+      # At least one provider key is required for reviews to actually run.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # Optional — only used when TOOL_MODE=network.
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false

@@ -1,0 +1,90 @@
+// Phase 8 §6 — Final Error Taxonomy. Classified by severity and category.
+// Lock: a failed tool/search narrows the review; it never creates evidence,
+// proves a claim false, or hides uncertainty.
+
+export const ERROR_SEVERITIES = ['recoverable', 'limited', 'blocking', 'terminal'] as const;
+export type ErrorSeverity = (typeof ERROR_SEVERITIES)[number];
+
+export const ERROR_TYPES = [
+  // Input / artifact
+  'insufficient_input',
+  'unable_to_classify_input',
+  'artifact_extraction_failed',
+  'artifact_mismatch',
+  'artifact_source_label_missing',
+  'scope_unclear',
+  'unsupported_request',
+  // Workflow
+  'invalid_state_transition',
+  'missing_required_review_function',
+  'serious_review_without_artifact',
+  'assumption_discovery_failed',
+  'assumption_ranking_failed',
+  'evidence_classification_failed',
+  'contradiction_check_failed',
+  'risk_ranking_failed',
+  'confidence_calibration_failed',
+  'next_action_invalid',
+  'trace_incomplete',
+  // Evidence
+  'user_claim_treated_as_evidence',
+  'weak_evidence_overstated',
+  'speculation_as_fact',
+  'contradiction_ignored',
+  'source_trust_misclassified',
+  'evidence_uninspectable',
+  'provided_but_unassessed',
+  'external_check_needed_unresolved',
+  'evidence_state_unknown',
+  // Tool / search
+  'tool_unavailable',
+  'tool_timeout',
+  'tool_error',
+  'source_unreachable',
+  'source_inconclusive',
+  'search_results_insufficient',
+  'conflicting_sources_unresolved',
+  'technical_lookup_inconclusive',
+  'competitor_check_inconclusive',
+  'numeric_check_insufficient_inputs',
+  'tool_result_non_material',
+  'tool_overuse_detected',
+  // Guardrail
+  'blind_validation_attempt',
+  'final_decision_delegation_attempt',
+  'professional_determination_attempt',
+  'unsupported_confidence_attempt',
+  'fake_precision_attempt',
+  'weak_evidence_strong_conclusion_attempt',
+  'speculation_as_fact_attempt',
+  'over_challenge_detected',
+  'under_challenge_detected',
+  'loop_without_material_change',
+  'tool_use_without_materiality',
+  // Evaluation
+  'eval_failed',
+  'eval_weak',
+  'regression_triggered',
+  'critical_failure_detected',
+  'manual_review_required',
+  'automated_eval_inconclusive',
+  'eval_schema_invalid',
+  // Cost / budget
+  'cost_budget_exceeded',
+  'search_budget_exceeded',
+  'tool_budget_exceeded',
+  'retry_budget_exceeded',
+  'cost_attribution_missing',
+  'provider_pricing_unknown',
+  'cost_tracking_failed',
+  // System / provider
+  'timeout',
+  'rate_limit',
+  'provider_error',
+  'serialization_error',
+  'storage_error',
+  'schema_validation_error',
+  'network_error',
+  'unknown_error',
+] as const;
+export type ErrorType = (typeof ERROR_TYPES)[number];

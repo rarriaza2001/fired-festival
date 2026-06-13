@@ -1,0 +1,218 @@
+// Don't Go Blind — persistence layer.
+//
+// Tables mirror the @dgb/shared Zod schemas (the single source of truth).
+// SQLite has no native enum/JSON types, so:
+//   - enum-typed columns are String; the allowed values are enforced at the
+//     Zod boundary in @dgb/shared before any row is written.
+//   - nested/array shapes persist as validated JSON strings.
+// TraceEvent is kept fully columnar (one column per phase8.v1 field) so the
+// replay and eval layers can query the trace directly.
+//
+// BYOK: provider API keys are NEVER persisted. No column here holds a key.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A single review run (one submitted decision). Root aggregate.
+model Review {
+  id        String   @id // run_id (UUID authored by the orchestrator)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Raw submission (reviewInputSchema). contextItems is JSON: [{label, ref}].
+  inputText    String
+  contextItems String @default("[]")
+
+  // Lifecycle. All enum-typed (validated in @dgb/shared).
+  mode          String? // REVIEW_MODES
+  reviewState   String // current REVIEW_STATES
+  terminalState String? // TERMINAL_STATES
+  stopReason    String? // STOP_REASONS
+
+  // Full reviewOutputSchema JSON, written once the review is assembled.
+  outputJson String?
+
+  traceEvents TraceEvent[]
+  transitions StateTransition[]
+  artifact    Artifact?
+  evalResult  EvalResult?
+  metric      Metric?
+  alarms      Alarm[]
+  checkpoints Checkpoint[]
+
+  @@index([reviewState])
+  @@index([terminalState])
+}
+
+/// Uploaded context attachment metadata (binary stored on disk).
+model Attachment {
+  id          String   @id
+  filename    String
+  mimeType    String
+  kind        String
+  sizeBytes   Int
+  storagePath String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+}
+
+/// phase8.v1 canonical trace payload — one row per emitted event.
+/// Columnar by design so replay/eval can filter and order without parsing JSON.
+model TraceEvent {
+  // Surrogate autoincrement PK doubles as the monotonic replay order (SQLite
+  // permits autoincrement only on the primary key).
+  id      Int    @id @default(autoincrement())
+  eventId String @unique // event_id (UUID)
+
+  schemaVersion String @default("phase8.v1")
+  runId         String
+  parentEventId String?
+  eventName     String // TRACE_EVENTS
+  timestamp     String // ISO-8601, authored by TraceService
+
+  stage         String? // WORKFLOW_STAGES
+  reviewState   String? // REVIEW_STATES
+  terminalState String? // TERMINAL_STATES
+
+  durationMs  Float?
+  costUsd     Float?
+  model       String?
+  toolName    String?
+  searchDepth String? // SEARCH_DEPTHS
+  loopCount   Int?
+
+  guardrailCategory String? // GUARDRAIL_CATEGORIES
+  confidenceBefore  String? // CONFIDENCE_LABELS
+  confidenceAfter   String? // CONFIDENCE_LABELS
+  evalResult        String? // EVAL_RESULTS
+  errorType         String? // ERROR_TYPES
+  errorSeverity     String? // ERROR_SEVERITIES
+  stopReason        String? // STOP_REASONS
+
+  // Bounded event metadata only (references, not content). JSON record.
+  details String @default("{}")
+
+  // A4: live UI renders user_visible only; full trace persists for audit/eval.
+  visibility String @default("internal_only")
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, id])
+  @@index([runId, visibility])
+  @@index([eventName])
+}
+
+/// Phase 2J — every review-state transition, for trace reconstruction.
+model StateTransition {
+  id        Int     @id @default(autoincrement())
+  runId     String
+  fromState String? // REVIEW_STATES (null on the first transition)
+  toState   String // REVIEW_STATES
+  at        String // ISO-8601
+  reason    String
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, id])
+}
+
+/// Phase 3 Step 4 — extracted decision artifact (one per review).
+model Artifact {
+  id    Int    @id @default(autoincrement())
+  runId String @unique
+
+  // Full decisionArtifactSchema JSON (five provenance-labeled blocking fields).
+  payload              String
+  extractionConfidence String // CONFIDENCE_LABELS (hoisted for querying)
+  inferredReframe      String?
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+/// Phase 7 — evaluation record. human_review_required is a hard lock.
+model EvalResult {
+  id    Int    @id @default(autoincrement())
+  runId String @unique
+
+  result              String // EVAL_RESULTS (pass|weak|fail)
+  evaluatorType       String // EVALUATOR_TYPES
+  humanReviewRequired Boolean @default(true)
+
+  // Full evalResultRecordSchema JSON (12 dimension verdicts, failures, etc.).
+  payload   String
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+/// Phase 8 §3/§7 — per-run rollup metrics. Flat, so kept columnar.
+model Metric {
+  runId String @id
+
+  durationMs    Float
+  terminalState String
+  stopReason    String
+  retryCount    Int     @default(0)
+
+  loopCount          Int     @default(0)
+  maxLoopReached     Boolean @default(false)
+  clarificationCount Int     @default(0)
+  searchDepth        String  @default("no_search")
+  toolCallCount      Int     @default(0)
+
+  finalReviewConfidence String?
+  evalResult            String?
+  guardrailTriggerCount Int     @default(0)
+
+  totalCostUsd Float?
+  costAccuracy String @default("unknown")
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+/// Alarms pillar — a structured alarm fired when something goes wrong.
+/// Named type + severity + category + recommended action, all enforced at the
+/// @dgb/shared Zod boundary (alarmSchema) before a row is written.
+model Alarm {
+  id    Int    @id @default(autoincrement())
+  runId String
+
+  type              String // ERROR_TYPES
+  severity          String // ERROR_SEVERITIES
+  category          String // ALARM_CATEGORIES
+  recommendedAction String
+  message           String
+  context           String   @default("{}") // bounded JSON references, never content
+  createdAt         DateTime @default(now())
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, id])
+}
+
+/// Checkpoint — a serialized snapshot of run state after a completed stage.
+/// One row per stage action; a run can be replayed forward from any seq without
+/// re-running the prior stages. The BYOK key is NEVER part of the snapshot.
+model Checkpoint {
+  id    Int    @id @default(autoincrement())
+  runId String
+
+  seq      Int // 1-based count of completed stage actions at capture time
+  action   String // AGENT_ACTIONS — the stage that had just completed
+  snapshot String // full serialized RunContext slice (JSON)
+
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId, seq])
+}
