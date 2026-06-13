@@ -49,7 +49,7 @@ export class StructuredLlmService {
       system,
       messages,
       maxTokens,
-      temperature: 0,
+      ...(byok.providerName !== 'anthropic' ? { temperature: 0 } : {}),
       ...(withStructured && responseFormat
         ? { responseFormat: { type: 'json_schema', schema: responseFormat.schema } }
         : {}),

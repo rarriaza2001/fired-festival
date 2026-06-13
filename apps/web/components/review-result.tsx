@@ -101,10 +101,26 @@ function exteriorSources(item: EvidenceItem): readonly string[] {
 export function ReviewResultView({ output }: ReviewResultViewProps) {
   const outsideViewItems = output.evidence.items.filter((e) => isBaseRateNote(e.note));
   const insideViewItems = output.evidence.items.filter((e) => !isBaseRateNote(e.note));
+  // The review only runs at all once the input clears the (generous) sufficiency
+  // gate — so it is already "doable". Show the low-confidence badge only on the
+  // limited path, where that bar was lowered severely for a thin-but-real decision
+  // (evidence_weak → sufficient_limited → capped). Full reviews stay unbadged.
+  const isLowConfidence = output.mode === 'limited';
   return (
     <ThemedCard
       title="Stress-test result"
-      headingExtra={<span className="tag">Review complete</span>}
+      headingExtra={
+        isLowConfidence ? (
+          <span
+            className="tag warning"
+            title="This decision cleared the bar but only barely — the input was thin or the supporting evidence was weak. Treat the assessment as directional, not definitive."
+          >
+            Low confidence
+          </span>
+        ) : (
+          <span className="tag">Review complete</span>
+        )
+      }
     >
       <Section index={0} title="1 · Your Hidden Assumptions">
         <ul className="list">

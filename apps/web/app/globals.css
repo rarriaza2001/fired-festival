@@ -148,6 +148,7 @@ label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px
   background: var(--main-1);
 }
 .tag.detail { color: var(--detail); border-color: var(--detail-muted); }
+.tag.warning { color: var(--accent); border-color: var(--accent); }
 
 .list { margin: 0; padding-left: 18px; }
 .list li { margin-bottom: 8px; }

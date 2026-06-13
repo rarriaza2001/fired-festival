@@ -63,6 +63,20 @@ function safeErrorDetail(status: number, bodyText: string): string {
   return `HTTP ${status}`;
 }
 
+
+/** Claude 4.7+ rejects temperature/top_p — omit sampling params for these ids. */
+export function anthropicSupportsTemperature(model: string): boolean {
+  const id = model.toLowerCase();
+  const blocked = [
+    'claude-opus-4-7',
+    'claude-opus-4-8',
+    'claude-sonnet-4-6',
+    'claude-fable',
+    'claude-mythos',
+  ];
+  return !blocked.some((prefix) => id.startsWith(prefix));
+}
+
 function estimateCost(
   model: string,
   usage: TokenUsage | null,
@@ -107,7 +121,8 @@ export class AnthropicAdapter implements ProviderAdapter {
           model: request.model,
           max_tokens: request.maxTokens,
           thinking: { type: 'disabled' },
-          ...(request.temperature !== undefined
+          ...(request.temperature !== undefined &&
+          anthropicSupportsTemperature(request.model)
             ? { temperature: request.temperature }
             : {}),
           ...(request.system ? { system: request.system } : {}),

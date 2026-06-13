@@ -1,169 +1,111 @@
-# HARNESS.md — "Don't Go Blind" Decision Stress-Tester
+# The Harness
 
-A **harness** is the framework an AI agent lives inside. This document describes the architecture
-and design of the harness in this repo: what the agent gets for free, how it is constrained, how its
-output is checked, how material flows in and out, and what fires when something goes wrong.
+This document explains how the "Don't Go Blind" decision reviewer works under the hood.
 
-The worker is an LLM (BYOK — Anthropic or OpenAI). The domain is **resource-intensive decisions**:
-the harness runs a bounded, skeptical review that stress-tests a decision's hidden assumptions, weak
-evidence, contradictions, external realities, and failure modes, then returns a fair,
-confidence-calibrated, actionable assessment.
+A harness is the code an AI model runs inside. The model does the thinking. The harness decides what the model is allowed to do next, checks what it produces, and stops it when something goes wrong. In this project the model is an LLM you bring your own key for (Anthropic or OpenAI). The job is to review a resource-intensive decision: take someone's messy description of a choice they are about to make, pull out the real decision, and stress-test it against hidden assumptions, weak evidence, contradictions, outside reality, and ways it could fail. The result is a fair, confidence-calibrated, actionable assessment.
 
-> **Design principle: "the model proposes, the harness disposes."** Each turn the model proposes the
-> next action; the harness validates it, forces it when only one move is legal, or terminates the
-> run. The model never controls budgets, completeness, output validity, guardrails, or alarms.
+The whole design follows one rule: the model proposes, the harness disposes. Every turn the model suggests the next action. The harness then validates that action, or forces it when only one move is legal, or ends the run. The model never controls the budget, never decides when the review is complete, never decides whether its own output is valid, and never silences a guardrail or an alarm.
 
----
+## Where the code lives
 
-## 1. Architecture — the model-directed control loop
+The control loop is in `apps/api/src/agent/`. Each file does one thing.
 
-The loop lives in `apps/api/src/agent/`:
+- `agent-runner.service.ts` runs the loop. It perceives the current state, asks for a decision, executes the chosen action, records the result, and repeats until a terminal action. It also owns all post-processing: intake routing, the confidence cap, the guardrail checklist, the bounded reassessment loop, the evaluation, metrics, alarms, and checkpoints.
+- `agent-decider.ts` picks the action for one turn. It returns one of three sources: `forced` when exactly one action is legal, `model` when several are legal and the model chose, or `fallback` when the model errored or proposed something illegal.
+- `action-space.ts` answers one question: given the current state, which actions are legal right now? Preconditions gate every choice, so the model can never skip a stage or run `finalize` before the review is actually complete.
+- `agent-state.ts` is the blackboard. It holds everything the loop carries across turns, and every helper returns a new copy instead of mutating the old one.
+- `observation.ts` writes the short, deterministic briefing the model reads each turn: where the run stands, what is done, and which actions are legal.
+- `termination.ts` holds the hard ceilings. Thirty-two turns, eight tool calls, two dollars.
+- `policy.ts` is the gatekeeper. It validates a proposed decision against budget and legality before anything runs.
+- `action-handlers.ts` wraps the existing review stages and the external-check tool. It runs them. It does not reimplement them.
 
-| Module | Role |
-|---|---|
-| `agent-runner.service.ts` | The control loop: perceive → decide → act → observe, until a terminal action. All post-processing (intake routing, confidence cap, guardrail checklist, bounded loop, eval, metrics, **alarms**, **checkpoints**). |
-| `agent-decider.ts` | Per-turn selection: `forced` (one legal action) / `model` (several legal) / `fallback` (model error or illegal proposal). |
-| `action-space.ts` | `legalActions(state)` — preconditions gate every choice so a stage can never be skipped and `finalize` is illegal until the run is complete. |
-| `agent-state.ts` | Immutable blackboard (working memory) — `completedActions` drives the completeness gate. |
-| `observation.ts` | Formats the last result + remaining gaps for the model each turn. |
-| `termination.ts` + `AGENT_BUDGET` | Hard ceilings: `MAX_TURNS=32`, `MAX_TOOL_CALLS=8`, `MAX_COST_USD=2.0`. |
-| `policy.ts` | Forced-action / precondition policy. |
-| `action-handlers.ts` | Thin wrappers around the structured review stages + the tool. |
+The list of actions itself lives in `@dgb/shared/constants/agent-actions.ts`: nine review stages, one `external_check` tool action, and three terminal actions (`finalize`, `refuse_unsupported`, `request_clarification`).
 
-The action space (`@dgb/shared/constants/agent-actions.ts`) is typed: nine review stages, an
-`external_check` tool action, and three terminal control actions (`finalize`, `refuse_unsupported`,
-`request_clarification`).
+## How one turn works
 
----
+Read `agent-decider.ts` and `policy.ts` together and the loop is simple.
 
-## 2. The four pillars (each a distinct, identifiable component, separate from the worker)
+First the harness asks the action space which actions are legal. If only one is legal, the harness takes it without calling the model at all. This covers most turns, because the review has a natural order and most steps have a single valid successor. A forced move is deterministic, so the spine's guarantees hold even though a model drives the loop.
 
-### Pillar 1 — Guardrails (constrain behavior; *declared, not implicit*)
-- **Where:** `apps/api/src/guardrails/guardrail-registry.ts` + `guardrail-checklist.ts`.
-- **Declared:** `GUARDRAIL_REGISTRY` is an array of 11 entries, each the 7-field shape
-  (`category`, `trigger_condition`, `required_behavior`, `confidence_effect`,
-  `terminal_state_effect`, `next_action_effect`, `user_facing_explanation`). It is validated at
-  module load (`guardrailRegistryEntrySchema.parse`) — a malformed entry throws at startup.
-- **Behavior change, not warning:** `runPreOutputChecklist` runs before output is assembled; a High
-  confidence resting on weak/unverified evidence is **downgraded and capped**, which forces a limited
-  review. Unsupported requests are reframed and refused. Triggers are emitted as `guardrail_triggered`.
+When several actions are legal, the model has a real choice. The two common forks are "verify another piece of evidence" versus "move on" and "keep going" versus "finalize." The harness sends the model the legal set and accepts its pick only if the pick is in that set. If the model errors, times out, or names an action that is not legal, the harness falls back to a fixed order: drain pending external checks first, then take the earliest legal stage. A broken model call never stalls the run.
 
-### Pillar 2 — Checkpoints (evaluate outputs; *explicit pass/fail*)
-- **Where:** `apps/api/src/eval/structural-evaluator.ts` + `eval-harness.service.ts`.
-- **Explicit criteria:** `evaluateStructure(output)` applies deterministic rules across 12 dimensions
-  (confidence calibration, fake precision, next-action quality, evidence discipline, …) and
-  aggregates to `pass | weak | fail`: any `critical_failure` → `fail`; any `weak` → `weak`.
-- **Persisted (replayable):** the result is written to the `EvalResult` table with
-  `human_review_required = true` (a hard lock). A run's verdict can be read back without re-running
-  any stage; see replay (§4).
+Before any action executes, `policy.ts` runs the decision past two checks. If the run is out of budget, it terminates. If the action is illegal, it is rejected and the legal set comes back so the loop can re-prompt. Only a legal, in-budget action runs.
 
-### Pillar 3 — Material handling (clean interfaces in/out)
-- **In:** `apps/api/src/ingestion/context-ingestion.service.ts` parses attachments (PDF/DOCX/PPTX/
-  spreadsheet) + fetches URLs into validated `IngestedContextItem`s. The external-check interface is
-  `apps/api/src/tools/tool-adapter.ts` — a `ToolAdapter` with a typed `ToolRequest`/`ToolResult`
-  contract; `evidence-classifier.ts` decides what needs checking and folds results back immutably.
-- **Out:** every review is assembled and validated against `reviewOutputSchema`
-  (`packages/shared/src/schemas/review.ts`) at `finalize` before it is persisted — material never
-  leaves the harness unvalidated.
+## The action space keeps the review honest
 
-### Pillar 4 — Alarms (fire when something goes wrong; *structured output*)
-- **Where:** `apps/api/src/alarms/alarm-registry.ts` + `alarm.service.ts`; contract in
-  `packages/shared/src/schemas/alarm.ts`.
-- **Declared:** `ALARM_REGISTRY` binds each named alarm type (from the frozen `ERROR_TYPES` taxonomy)
-  to a **severity** (`recoverable | limited | blocking | terminal`), a **category**, and a fixed
-  **recommended action**. Validated at module load.
-- **Structured output:** `AlarmService.raise()` produces a validated `Alarm`
-  = `{ type, severity, stage, message, context, recommended_action }`, persists it to the `Alarm`
-  table, and emits an `alarm_raised` trace event (carrying `error_type` + `error_severity` columns +
-  the recommended action in `details`). Fully fail-safe — an alarm can never break the run it reports.
-- **Where it fires (in the runner):** tool/external-check failure (`tool_error`), hard budget
-  ceilings (`cost_budget_exceeded` / `retry_budget_exceeded`), an evaluation critical failure
-  (`critical_failure_detected`), and any unhandled / schema-validation failure
-  (`schema_validation_error` / `unknown_error`).
-- **Read it:** `GET /telemetry/alarms/:runId` (also visible inline on the trace).
+The review has a canonical order, and `action-space.ts` enforces it with preconditions. Each stage names its predecessor: you cannot extract the artifact before you assess sufficiency, you cannot assess evidence before you discover assumptions, and so on down the line. `finalize` stays illegal until every mandatory stage has run. An external check stays illegal until evidence has been assessed, illegal once the tool budget is spent, and illegal when nothing is waiting to be checked.
 
-| Pillar | Distinct component | Declared / explicit | Persisted |
-|---|---|---|---|
-| Guardrails | `guardrails/` | `GUARDRAIL_REGISTRY` (11 entries, validated) | `guardrail_triggers` in output |
-| Checkpoints | `eval/` | 12 dimensions → `pass\|weak\|fail` | `EvalResult` table |
-| Material | `tools/` + `ingestion/` | `ToolAdapter` contract / `reviewOutputSchema` | `Review.outputJson` |
-| Alarms | `alarms/` | `ALARM_REGISTRY` (type→severity→action) | `Alarm` table + trace |
+This is the trick that lets a model choose the order without breaking anything. Functionality is the floor, set by preconditions. Agency is the freedom above that floor. The model gets to make the genuine calls, and the harness guarantees it can never make an invalid one.
 
----
+## The four pillars
 
-## 3. Behavior changes meaningfully on guardrail/checkpoint feedback
+Each pillar is a separate component, declared up front rather than buried in logic, and each leaves a record you can read back.
 
-- **Confidence cap:** `doConfidence` caps a calibrated High to Medium when intake flagged weak
-  evidence; `runPreOutputChecklist` downgrades again if a High still rests on unverified support.
-- **Bounded reassessment loop:** when confidence changes materially, `loop/loop-controller.ts`
-  (`evaluateLoop`) grants **exactly one** re-selection of the next action, hard-capped and forbidden
-  without material change. The agent literally re-frames its recommendation in response to the
-  checkpoint feedback (`agent-runner.service.ts:applyGuardrailsAndLoop`).
+### Guardrails constrain behavior
 
----
+The code is in `apps/api/src/guardrails/`. `GUARDRAIL_REGISTRY` is a list of eleven entries. Each entry has the same seven fields: the category, the condition that triggers it, the behavior it requires, its effect on confidence, its effect on the terminal state, its effect on the next action, and a plain explanation for the user. The registry validates when the module loads, so a malformed entry crashes startup instead of failing silently later.
 
-## 4. "Should" / Bonus capabilities
+A guardrail changes behavior. It does not just print a warning. `runPreOutputChecklist` runs before the output is assembled. A High confidence that rests on weak or unverified evidence gets downgraded and capped, which forces a more limited review. An unsupported request gets reframed and refused. Every trigger emits a `guardrail_triggered` trace event.
 
-### Swappable agent interface (drop in a different worker, no harness changes)
-`apps/api/src/providers/` defines `ProviderAdapter` (`provider-adapter.ts`) — a single
-`complete(request, apiKey)` method over provider-agnostic `CompletionRequest`/`CompletionResult`
-types (`provider.types.ts`). `ProviderRegistry` (`provider.registry.ts`) resolves a `ProviderName`
-to its adapter; **Anthropic and OpenAI adapters are both registered today**. The harness loop,
-stages, guardrails, checkpoints, and alarms never know which provider ran. Adding a worker = implement
-`ProviderAdapter`, register it, add its name to the `Provider` union — zero loop changes.
+### Checkpoints evaluate the output
 
-**Second-worker swap demo:** submit a decision with `X-Provider-Name: anthropic`, then submit the
-same decision with `X-Provider-Name: openai` (toggle in the web settings panel). Identical harness,
-different worker, both reach a terminal review.
+The code is in `apps/api/src/eval/`. `evaluateStructure(output)` runs deterministic rules across twelve dimensions, including confidence calibration, fake precision, the quality of the recommended next action, and evidence discipline. It rolls those up to one verdict: `pass`, `weak`, or `fail`. Any critical failure makes it `fail`. Any single weak finding makes it `weak`. The harness writes the result to the `EvalResult` table and sets `human_review_required` to true, which is a hard lock. You can read a run's verdict back later without rerunning a single stage.
 
-### Checkpoint persistence + replay-from-checkpoint
-- `apps/api/src/agent/checkpoint.ts` defines the serializable run-state snapshot. After **every**
-  completed stage, the runner persists a `Checkpoint` row (seq, action, JSON snapshot) — fail-safe.
-- `AgentRunner.replay(runId, fromSeq, byok)` rehydrates the snapshot and resumes the **same loop**.
-  Because `legalActions(state)` is derived from `completedActions`, prior stages are never re-offered
-  or re-run — the run continues *forward* from the checkpoint.
-- API: `GET /reviews/:id/checkpoints` (list resume points) and `POST /reviews/:id/replay { fromSeq }`.
-- **The BYOK key is never part of a checkpoint** — it is re-supplied per replay request.
+### Material handling keeps clean interfaces in and out
 
-### Human-in-the-loop escalation (knows when to stop and ask)
-`apps/api/src/workflow/intake-controller.ts` classifies intake. When a request is **unsupported** the
-harness forces `refuse_unsupported` (reframe, never answer); when **blocking fields are missing** it
-forces `request_clarification` and surfaces the questions (`clarification_requested`) rather than
-guessing. Both are terminal — the harness stops and asks.
+On the way in, `apps/api/src/ingestion/context-ingestion.service.ts` parses attachments (PDF, DOCX, PPTX, spreadsheets) and fetches URLs into validated context items. External checks go through one typed contract, `ToolAdapter` in `apps/api/src/tools/tool-adapter.ts`, with a `ToolRequest` in and a `ToolResult` out. The classifier decides what actually needs checking and folds results back into state immutably. On the way out, every review validates against `reviewOutputSchema` at `finalize` before it is saved. Nothing leaves the harness unvalidated.
 
----
+### Alarms fire when something breaks
 
-## 5. Observability
+The code is in `apps/api/src/alarms/`. `ALARM_REGISTRY` maps each named error type, drawn from a frozen taxonomy, to a severity (`recoverable`, `limited`, `blocking`, or `terminal`), a category, and a fixed recommended action. The registry validates at module load. `AlarmService.raise()` produces a validated alarm object, saves it to the `Alarm` table, and emits an `alarm_raised` trace event. The whole path is fail-safe, so raising an alarm can never break the run that the alarm reports on.
 
-The `phase8.v1` trace spine (`@dgb/shared/constants/trace-events.ts`) records every state transition
-and reason (never hidden reasoning): control-loop turns (`agent_turn_started`, `action_selected`,
-`action_executed`, `agent_terminated`), every stage, tool call, confidence change, guardrail trigger,
-loop, **`alarm_raised`**, and terminal event. Every event is persisted (`TraceService`) and an
-additive, fail-safe OpenTelemetry bridge (`apps/api/src/telemetry/`, gated on `OTEL_ENABLED`) exports
-spans + metrics. Read APIs: `GET /telemetry/traces/:runId`, `/telemetry/metrics/:runId`,
-`/telemetry/alarms/:runId`.
+Alarms fire on tool failure, on hitting a hard budget ceiling, on an evaluation critical failure, and on any unhandled or schema-validation error. Read them at `GET /telemetry/alarms/:runId`, or see them inline on the trace.
 
----
+## Behavior really does change on feedback
 
-## 6. Running it
+This is the part that separates a real agent from a fixed script.
+
+The confidence cap works in two places. `doConfidence` caps a calibrated High down to Medium when intake already flagged the evidence as weak. The pre-output checklist downgrades again if a High still rests on unverified support by the end.
+
+When confidence shifts in a material way, the loop controller in `apps/api/src/loop/loop-controller.ts` grants exactly one chance to reselect the next action. The pass is hard-capped at one and is forbidden without a material change, so the loop cannot spin. The agent uses that pass to reframe its recommendation in response to the checkpoint feedback. The wiring is in `applyGuardrailsAndLoop` in the runner.
+
+## Swapping the worker
+
+The model behind the harness is replaceable without touching the loop. `apps/api/src/providers/provider-adapter.ts` defines one method, `complete(request, apiKey)`, over provider-agnostic request and result types. The registry resolves a provider name to its adapter. Both the Anthropic and OpenAI adapters are registered today, and the loop, the stages, the guardrails, the checkpoints, and the alarms never know which one ran.
+
+To demonstrate it, submit a decision with the header `X-Provider-Name: anthropic`, then submit the same decision with `X-Provider-Name: openai` (the web settings panel toggles this). Same harness, different worker, both reach a terminal review. Adding a third worker means writing one adapter, registering it, and adding its name to the provider union. The loop does not change.
+
+## Checkpoints and replay
+
+After every completed stage the runner saves a `Checkpoint` row: a sequence number, the action, and a JSON snapshot of run state. The save is fail-safe. `AgentRunner.replay(runId, fromSeq, byok)` rehydrates a snapshot and resumes the same loop from that point. Because the legal action set comes from what has already completed, replay never reoffers or reruns a finished stage. It moves forward from the checkpoint, not backward.
+
+The API is `GET /reviews/:id/checkpoints` to list resume points and `POST /reviews/:id/replay { fromSeq }` to resume. The BYOK key is never part of a checkpoint. You resupply it on each replay request.
+
+## Knowing when to stop and ask
+
+`apps/api/src/workflow/intake-controller.ts` classifies the input first. When the request is something the reviewer should not answer, the harness forces `refuse_unsupported` and reframes instead of answering. When required fields are missing, it forces `request_clarification`, surfaces the specific questions, and stops rather than guessing. Both outcomes are terminal. The harness would rather stop and ask than fill in a blank itself.
+
+## Observability
+
+A single trace spine, `phase8.v1` in `@dgb/shared/constants/trace-events.ts`, records every state change and the reason for it. That includes each loop turn (`agent_turn_started`, `action_selected`, `action_executed`, `agent_terminated`), every stage, every tool call, every confidence change, every guardrail trigger, every reassessment loop, every alarm, and the terminal event. The trace records decisions and reasons, not hidden chain-of-thought.
+
+`TraceService` persists every event. An OpenTelemetry bridge in `apps/api/src/telemetry/` exports spans and metrics; it is additive, fail-safe, and off unless you set `OTEL_ENABLED=true`. Read the data at `GET /telemetry/traces/:runId`, `GET /telemetry/metrics/:runId`, and `GET /telemetry/alarms/:runId`.
+
+## Running it
 
 ```bash
 pnpm install
-pnpm --filter @dgb/shared build      # build shared contracts first
-pnpm --filter @dgb/api exec prisma migrate deploy   # apply DB migrations (SQLite)
-pnpm dev                             # api + web in parallel
+pnpm --filter @dgb/shared build                      # build the shared contracts first
+pnpm --filter @dgb/api exec prisma migrate deploy     # apply the SQLite migrations
+pnpm dev                                              # run the api and web together
 ```
-- Typecheck: `pnpm -r typecheck` (all three projects).
-- Test: `pnpm --filter @dgb/api test` (262 tests — the behavioral contract).
-- Demo: open the web app, paste a decision from `DEMO-INPUTS.md`, watch the live agent trace.
 
----
+- Typecheck everything: `pnpm -r typecheck`.
+- Run the API tests: `pnpm --filter @dgb/api test`.
+- Try it: open the web app, paste a decision from `DEMO-INPUTS.md`, and watch the trace play out live.
 
-## 7. Invariants (the behavioral contract)
+## The contract
 
-The harness changes *how the next step is chosen*, never *what happens*. Functional invariants
-**I1–I12** are specified in `AGENTIC-HARNESS-PLAN.md §3` (e.g. I1 unsupported requests refused; I4
-High-on-weak-evidence downgraded + capped; I5 loops only on material change; I6 tools never fabricate;
-I10 output validates `reviewOutputSchema`; I11 per-run eval + human-review lock). The 262-test API
-suite (`pnpm --filter @dgb/api test`) is the contract — alarms and replay were added **additively**
-(new modules, one new trace event, two new tables) with every pre-existing spec still green.
+The harness changes how the next step gets chosen. It never changes what happens. Every stage still runs, every guardrail still fires, every loop stays bounded, and the output still validates against `reviewOutputSchema`. The invariants are written out as I1 through I12 in `AGENTIC-HARNESS-PLAN.md`. A few of them: unsupported requests get refused (I1), a High built on weak evidence gets downgraded and capped (I4), the loop runs only on a material change (I5), tools never fabricate a result (I6), and the output always validates (I10).
+
+The API test suite is the real contract. If a change would move an existing test or an evaluation verdict, the change is wrong, not the test. Alarms and replay were added on top of that suite as new modules, one new trace event, and two new tables, with every earlier test still passing.
