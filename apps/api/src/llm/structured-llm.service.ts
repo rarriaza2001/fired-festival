@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { ZodType, ZodTypeDef } from 'zod';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '@dgb/shared';
 import { ProviderRegistry } from '../providers/provider.registry';
 import { ProviderError } from '../providers/provider-adapter';
 import type { ChatMessage } from '../providers/provider.types';
 import type { Byok, StructuredResult } from './llm.types';
 
-const DEFAULT_MAX_TOKENS = 2000;
 const MAX_ERROR_ISSUES = 6;
 
 type ParseOutcome<T> =
@@ -44,7 +44,7 @@ export class StructuredLlmService {
     schema: ZodType<T, ZodTypeDef, unknown>,
     system: string,
     user: string,
-    maxTokens: number = DEFAULT_MAX_TOKENS,
+    maxTokens: number = DEFAULT_MAX_OUTPUT_TOKENS,
   ): Promise<StructuredResult<T>> {
     const adapter = this.registry.get(byok.providerName);
     const ask = (messages: ReadonlyArray<ChatMessage>) =>

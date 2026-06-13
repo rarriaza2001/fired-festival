@@ -129,7 +129,7 @@ export function HeroSection({
             className="max-w-xl justify-center text-center text-base text-[var(--muted)] md:text-lg"
           />
           <DecryptedText
-            text="Bounded skeptical review · Claude or OpenAI"
+            text="Bounded skeptical review · ChatGPT or Claude"
             animateOn="view"
             speed={40}
             maxIterations={12}

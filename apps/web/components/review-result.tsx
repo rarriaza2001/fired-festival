@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import type { EvidenceItem, MainCompetitor } from '@dgb/shared';
-import { isExternalEvidenceSource, isHttpUrl } from '@dgb/shared';
+import { isExternalEvidenceSource, isHttpUrl, isBaseRateNote } from '@dgb/shared';
 import type { ReviewOutput } from '@/lib/api';
 import { ThemedCard } from '@/components/ui/themed-card';
 import FadeContent from '@/components/ui/FadeContent';
@@ -99,6 +99,8 @@ function exteriorSources(item: EvidenceItem): readonly string[] {
 }
 
 export function ReviewResultView({ output }: ReviewResultViewProps) {
+  const outsideViewItems = output.evidence.items.filter((e) => isBaseRateNote(e.note));
+  const insideViewItems = output.evidence.items.filter((e) => !isBaseRateNote(e.note));
   return (
     <ThemedCard
       title="Stress-test result"
@@ -125,7 +127,7 @@ export function ReviewResultView({ output }: ReviewResultViewProps) {
 
       <Section index={2} title="3 · Evidence assessment">
         <ul className="list">
-          {output.evidence.items.map((e, i) => {
+          {insideViewItems.map((e, i) => {
             const sources = exteriorSources(e).length ? exteriorSources(e) : e.sources;
             return (
               <li key={i}>
@@ -159,7 +161,26 @@ export function ReviewResultView({ output }: ReviewResultViewProps) {
         </ul>
       </Section>
 
-      <Section index={5} title="6 · Your next action">
+      {outsideViewItems.length > 0 && (
+        <Section index={5} title="6 · Outside view (base rates)">
+          <ul className="list">
+            {outsideViewItems.map((e, i) => {
+              const sources = exteriorSources(e).length ? exteriorSources(e) : e.sources;
+              return (
+                <li key={i}>
+                  {e.statement}
+                  <ValidationLinks sources={sources} />
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+
+      <Section
+        index={outsideViewItems.length > 0 ? 6 : 5}
+        title={`${outsideViewItems.length > 0 ? 7 : 6} · Your next action`}
+      >
         <div className="next-action">
           <GradientText
             colors={['#4ADE80', '#D4AF37', '#4ADE80']}

@@ -15,6 +15,8 @@ const envSchema = z.object({
   ATTACHMENT_STORAGE_DIR: z.string().min(1).default('storage/attachments'),
   ATTACHMENT_TTL_HOURS: z.coerce.number().int().positive().default(24),
   LINK_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  /** Per-request LLM HTTP timeout (Opus on heavy stages can run several minutes). */
+  LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
   TOOL_MODE: z.enum(['model_only', 'network']).default('model_only'),
   /** Server-side LLM keys (local dev / deployment). Never sent to the client. */
   ANTHROPIC_API_KEY: z.string().min(1).optional(),

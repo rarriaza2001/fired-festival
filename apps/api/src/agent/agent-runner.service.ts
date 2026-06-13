@@ -656,6 +656,7 @@ export class AgentRunner {
       const { result, costUsd } = await runExternalCheckAction({
         statement: item.statement,
         fetchUrl,
+        decisionContext: ctx.artifact?.decision.value,
         tools: this.tools,
       });
       ctx.state = withToolCall(ctx.state, costUsd);

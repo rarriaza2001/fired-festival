@@ -1,7 +1,7 @@
 import type { CostAccuracy, EvidenceState, SourceTrustLevel } from '@dgb/shared';
 
-/** The three primitive operations that cover all 6 conceptual tool slots. */
-export type ToolPrimitive = 'search' | 'fetch' | 'ingest';
+/** The primitive operations a tool adapter can perform. */
+export type ToolPrimitive = 'search' | 'fetch' | 'ingest' | 'base_rate';
 
 /** A request to invoke one primitive operation. */
 export interface ToolRequest {
@@ -12,6 +12,8 @@ export interface ToolRequest {
    * - search: the web search query string
    * - fetch: the URL or document reference to retrieve
    * - ingest: the context item reference or raw text to parse
+   * - base_rate: a reference-class ("outside view") query — how often comparable
+   *   decisions actually achieve the claimed outcome (built by `buildBaseRateQuery`)
    */
   readonly query: string;
 }

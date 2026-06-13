@@ -142,6 +142,43 @@ describe('ModelOnlyToolAdapter', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // base_rate primitive (outside view) — must degrade, never fabricate (I6)
+  // ---------------------------------------------------------------------------
+
+  describe('invoke with base_rate primitive', () => {
+    it('returns available=false', async () => {
+      // Arrange
+      const request = makeRequest('base_rate', 'base rate for sales-led pivots');
+
+      // Act
+      const result = await adapter.invoke(request);
+
+      // Assert
+      expect(result.available).toBe(false);
+    });
+
+    it('returns evidenceState of external_check_unavailable with null content', async () => {
+      // Arrange
+      const request = makeRequest('base_rate');
+
+      // Act
+      const result = await adapter.invoke(request);
+
+      // Assert
+      expect(result.evidenceState).toBe('external_check_unavailable');
+      expect(result.content).toBeNull();
+    });
+
+    it('does not throw', async () => {
+      // Arrange
+      const request = makeRequest('base_rate');
+
+      // Act & Assert
+      await expect(adapter.invoke(request)).resolves.not.toThrow();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // ingest primitive
   // ---------------------------------------------------------------------------
 

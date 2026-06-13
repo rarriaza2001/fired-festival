@@ -6,14 +6,14 @@ import type { Provider } from './cost.js';
  * rather than low-latency chat.
  */
 export const DEFAULT_MODEL_BY_PROVIDER: Readonly<Record<Provider, string>> = {
-  anthropic: 'claude-opus-4-6',
+  anthropic: 'claude-opus-4-8',
   openai: 'gpt-4o',
   gemini: 'gemini-2.5-pro',
   grok: 'grok-3',
   local: 'local',
 };
 
-export const DEFAULT_PROVIDER: Provider = 'anthropic';
+export const DEFAULT_PROVIDER: Provider = 'openai';
 
 export function defaultModelForProvider(provider: Provider): string {
   return DEFAULT_MODEL_BY_PROVIDER[provider];

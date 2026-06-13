@@ -80,3 +80,17 @@ export function isHttpUrl(source: string): boolean {
   const t = source.trim();
   return t.startsWith('http://') || t.startsWith('https://');
 }
+
+
+/**
+ * Note prefix marking an evidence item as an outside-view / reference-class base
+ * rate (Kahneman's outside view; Tetlock's reference-class forecasting). The
+ * `base_rate` tool writes this prefix; the UI keys off it to surface a dedicated
+ * "Outside view" section.
+ */
+export const BASE_RATE_NOTE_PREFIX = 'Outside view — reference-class base rate';
+
+/** True when an evidence item's note marks it as an outside-view base rate. */
+export function isBaseRateNote(note: string | null | undefined): boolean {
+  return typeof note === 'string' && note.includes(BASE_RATE_NOTE_PREFIX);
+}

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { loadEnv } from '../config/env';
 import { z } from 'zod';
 import type { CostAccuracy } from '@dgb/shared';
 import { ProviderAdapter, ProviderError } from './provider-adapter';
@@ -18,6 +19,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
  * models report cost null / 'unknown' rather than a fabricated number.
  */
 const PRICING_PER_MTOK: ReadonlyArray<readonly [string, { input: number; output: number }]> = [
+  ['claude-opus-4-8', { input: 5, output: 25 }],
   ['claude-opus-4', { input: 15, output: 75 }],
   ['claude-sonnet-4', { input: 3, output: 15 }],
   ['claude-haiku-4', { input: 1, output: 5 }],
@@ -93,6 +95,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           'x-api-key': apiKey,
           'anthropic-version': ANTHROPIC_VERSION,
         },
+        signal: AbortSignal.timeout(loadEnv().LLM_REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           model: request.model,
           max_tokens: request.maxTokens,

@@ -1,6 +1,10 @@
 import type { ZodType, ZodTypeDef } from 'zod';
 import type { AgentAction } from '@dgb/shared';
 import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  HEAVY_STAGE_MAX_OUTPUT_TOKENS,
+} from '@dgb/shared';
+import {
   buildPrompt,
   STAGE_SCHEMAS,
   type StageKey,
@@ -9,6 +13,7 @@ import {
 import { StructuredLlmService } from '../llm/structured-llm.service';
 import type { Byok } from '../llm/llm.types';
 import type { ToolAdapter, ToolResult } from '../tools/tool-adapter';
+import { isPredictiveClaim, buildBaseRateQuery } from './base-rate';
 
 /**
  * Agent harness — action handlers (the action space's executable side).
@@ -35,6 +40,13 @@ import type { ToolAdapter, ToolResult } from '../tools/tool-adapter';
  * into the accumulator under the same StageKey so downstream prompts are byte
  * identical to the orchestrator's.
  */
+const STAGE_MAX_OUTPUT_TOKENS: Partial<Record<StageKey, number>> = {
+  assumptions: 6144,
+  evidence: HEAVY_STAGE_MAX_OUTPUT_TOKENS,
+  realityRisks: HEAVY_STAGE_MAX_OUTPUT_TOKENS,
+  nextAction: 6144,
+};
+
 const STAGE_ACTION_KEY = {
   assess_sufficiency: 'sufficiency',
   extract_artifact: 'artifact',
@@ -99,6 +111,7 @@ export async function runStageAction(
     schema,
     prompt.system,
     prompt.user,
+    STAGE_MAX_OUTPUT_TOKENS[stageKey] ?? DEFAULT_MAX_OUTPUT_TOKENS,
   );
   return { stageKey, data: result.data, costUsd: result.costUsd ?? 0 };
 }
@@ -108,6 +121,8 @@ export interface ExternalCheckContext {
   readonly statement: string;
   /** When set, fetch this URL directly (user-submitted links) before search. */
   readonly fetchUrl?: string;
+  /** The decision class (artifact decision), used to frame a base-rate query. */
+  readonly decisionContext?: string;
   readonly tools: ToolAdapter;
 }
 
@@ -119,11 +134,13 @@ export interface ExternalCheckResult {
 }
 
 /**
- * Run one external check against a single pending evidence item. Identical to
- * the orchestrator's per-item invocation: a `search` primitive on the item's
- * statement through the injected adapter. In model-only mode the adapter returns
- * `available: false` (a limitation, never a fabricated result); the runner
- * decrements the pending count and applies the result to the evidence item.
+ * Run one external check against a single pending evidence item. A user-supplied
+ * URL is fetched directly first. Otherwise the statement is routed by its shape:
+ * a *predictive* claim (forecast, timeline, success rate) gets the outside view —
+ * a `base_rate` reference-class lookup — while a present-tense factual claim gets
+ * a plain `search`, exactly as the orchestrator did. In model-only mode every
+ * primitive returns `available: false` (a limitation, never a fabricated result);
+ * the runner decrements the pending count and applies the result to the item.
  */
 export async function runExternalCheckAction(
   ctx: ExternalCheckContext,
@@ -136,6 +153,13 @@ export async function runExternalCheckAction(
     if (fetched.available) {
       return { result: fetched, costUsd: fetched.costUsd ?? 0 };
     }
+  }
+  if (isPredictiveClaim(ctx.statement)) {
+    const result = await ctx.tools.invoke({
+      primitive: 'base_rate',
+      query: buildBaseRateQuery(ctx.statement, ctx.decisionContext),
+    });
+    return { result, costUsd: result.costUsd ?? 0 };
   }
   const result = await ctx.tools.invoke({
     primitive: 'search',

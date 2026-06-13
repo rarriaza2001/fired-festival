@@ -3,7 +3,7 @@
 import { defaultModelForProvider, type Provider } from '@dgb/shared';
 import type { ProviderConfig } from '@/lib/api';
 
-const SWITCHABLE_PROVIDERS = ['anthropic', 'openai'] as const satisfies readonly Provider[];
+const SWITCHABLE_PROVIDERS = ['openai', 'anthropic'] as const satisfies readonly Provider[];
 
 interface ProviderSwitcherProps {
   value: ProviderConfig;
@@ -37,7 +37,7 @@ function OpenAiMark({ active }: { active: boolean }) {
 }
 
 function providerLabel(name: Provider): string {
-  return name === 'anthropic' ? 'Claude' : 'OpenAI';
+  return name === 'anthropic' ? 'Claude' : 'ChatGPT';
 }
 
 export function ProviderSwitcher({ value, onChange }: ProviderSwitcherProps) {
@@ -87,7 +87,7 @@ export function ProviderBadge({ providerName }: { providerName: string }) {
   return (
     <span
       className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--main-1)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]"
-      title={isAnthropic ? 'Using Claude (Anthropic)' : 'Using OpenAI'}
+      title={isAnthropic ? 'Using Claude' : 'Using ChatGPT'}
     >
       {isAnthropic ? <AnthropicMark active /> : <OpenAiMark active />}
       {providerLabel(isAnthropic ? 'anthropic' : 'openai')}

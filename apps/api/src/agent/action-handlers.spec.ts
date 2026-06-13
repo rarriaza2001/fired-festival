@@ -128,4 +128,45 @@ describe('action-handlers (wrap existing stages + tool)', () => {
     expect(out.result).toBe(toolResult);
     expect(out.costUsd).toBe(0);
   });
+
+  it('routes a predictive statement through the base_rate primitive', async () => {
+    const toolResult: ToolResult = {
+      available: true,
+      evidenceState: 'external_check_completed',
+      content: '30% of comparable pivots hit target',
+      sourceTrust: 'medium_trust',
+      costUsd: 0,
+      costAccuracy: 'exact',
+      note: 'Outside view — reference-class base rate (3 sources).',
+    };
+    const { tools, requests } = fakeTool(toolResult);
+    await runExternalCheckAction({
+      statement: 'We will hit $1M ARR in 12 months',
+      decisionContext: 'move from self-serve to sales-led',
+      tools,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.primitive).toBe('base_rate');
+    expect(requests[0]?.query).toContain('move from self-serve to sales-led');
+  });
+
+  it('keeps a present-tense factual statement on the search primitive', async () => {
+    const toolResult: ToolResult = {
+      available: false,
+      evidenceState: 'external_check_unavailable',
+      content: null,
+      sourceTrust: null,
+      costUsd: 0,
+      costAccuracy: 'unknown',
+      note: 'model-only mode',
+    };
+    const { tools, requests } = fakeTool(toolResult);
+    await runExternalCheckAction({
+      statement: 'The billing service runs on Postgres',
+      tools,
+    });
+
+    expect(requests[0]?.primitive).toBe('search');
+  });
 });

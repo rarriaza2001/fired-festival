@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PROVIDERS, type Provider } from '@dgb/shared';
+import { DEFAULT_PROVIDER, PROVIDERS, type Provider } from '@dgb/shared';
 import { loadEnv } from './env';
 
 const SERVER_CONFIGURED_PROVIDERS = ['anthropic', 'openai'] as const satisfies readonly Provider[];
@@ -23,7 +23,7 @@ export function resolveServerApiKey(provider: ServerConfiguredProvider): string 
 }
 
 export function resolveProvider(name: string | undefined): ServerConfiguredProvider {
-  const candidate = (name ?? 'anthropic').toLowerCase();
+  const candidate = (name ?? DEFAULT_PROVIDER).toLowerCase();
   if (!isServerConfiguredProvider(candidate)) {
     throw new BadRequestException(
       `Unsupported provider: ${name}. Use anthropic or openai.`,
