@@ -8,6 +8,12 @@ export interface ChatMessage {
   content: string;
 }
 
+/** Anthropic structured-output JSON schema envelope. */
+export interface JsonSchemaResponseFormat {
+  readonly type: 'json_schema';
+  readonly schema: Record<string, unknown>;
+}
+
 /** A single LLM completion request. The provider/model is caller-chosen. */
 export interface CompletionRequest {
   model: string;
@@ -15,6 +21,8 @@ export interface CompletionRequest {
   messages: ReadonlyArray<ChatMessage>;
   maxTokens: number;
   temperature?: number;
+  /** When set, Anthropic uses constrained JSON decoding for valid output. */
+  responseFormat?: JsonSchemaResponseFormat;
 }
 
 export interface TokenUsage {
@@ -32,4 +40,5 @@ export interface CompletionResult {
   usage: TokenUsage | null;
   costUsd: number | null;
   costAccuracy: CostAccuracy;
+  stopReason?: string | null;
 }

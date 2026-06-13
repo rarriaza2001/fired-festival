@@ -28,7 +28,14 @@ const PRICING_PER_MTOK: ReadonlyArray<readonly [string, { input: number; output:
 /** Untrusted external response — validated before use. */
 const anthropicResponseSchema = z.object({
   model: z.string(),
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
+  stop_reason: z.string().nullable().optional(),
+  content: z.array(
+    z.object({
+      type: z.string(),
+      text: z.string().optional(),
+      thinking: z.string().optional(),
+    }),
+  ),
   usage: z
     .object({ input_tokens: z.number(), output_tokens: z.number() })
     .optional(),
@@ -99,10 +106,21 @@ export class AnthropicAdapter implements ProviderAdapter {
         body: JSON.stringify({
           model: request.model,
           max_tokens: request.maxTokens,
+          thinking: { type: 'disabled' },
           ...(request.temperature !== undefined
             ? { temperature: request.temperature }
             : {}),
           ...(request.system ? { system: request.system } : {}),
+          ...(request.responseFormat
+            ? {
+                output_config: {
+                  format: {
+                    type: 'json_schema',
+                    schema: request.responseFormat.schema,
+                  },
+                },
+              }
+            : {}),
           messages: request.messages.map((m) => ({
             role: m.role,
             content: m.content,
@@ -137,6 +155,22 @@ export class AnthropicAdapter implements ProviderAdapter {
       .filter((c) => c.type === 'text' && typeof c.text === 'string')
       .map((c) => c.text ?? '')
       .join('');
+
+    if (!text.trim() && data.stop_reason === 'max_tokens') {
+      throw new ProviderError(
+        this.name,
+        response.status,
+        'Anthropic response hit max_tokens before emitting JSON text — retry with a higher token budget.',
+      );
+    }
+
+    if (!text.trim()) {
+      throw new ProviderError(
+        this.name,
+        response.status,
+        'Anthropic returned no text content in the response.',
+      );
+    }
     const usage: TokenUsage | null = data.usage
       ? {
           inputTokens: data.usage.input_tokens,
@@ -145,6 +179,13 @@ export class AnthropicAdapter implements ProviderAdapter {
       : null;
     const { costUsd, costAccuracy } = estimateCost(data.model, usage);
 
-    return { text, model: data.model, usage, costUsd, costAccuracy };
+    return {
+      text,
+      model: data.model,
+      usage,
+      costUsd,
+      costAccuracy,
+      stopReason: data.stop_reason ?? null,
+    };
   }
 }

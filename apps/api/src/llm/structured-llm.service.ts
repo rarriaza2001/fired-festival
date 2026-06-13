@@ -3,27 +3,16 @@ import type { ZodType, ZodTypeDef } from 'zod';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '@dgb/shared';
 import { ProviderRegistry } from '../providers/provider.registry';
 import { ProviderError } from '../providers/provider-adapter';
-import type { ChatMessage } from '../providers/provider.types';
+import type { ChatMessage, CompletionRequest } from '../providers/provider.types';
 import type { Byok, StructuredResult } from './llm.types';
+import { zodToAnthropicJsonSchema } from './anthropic-json-schema';
+import { parseJsonObject } from './json-extract';
 
 const MAX_ERROR_ISSUES = 6;
 
 type ParseOutcome<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: string };
-
-/**
- * Pull the JSON object out of a model response. Tolerates code fences and
- * leading/trailing prose by taking the outermost brace span.
- */
-function extractJsonBlock(text: string): string | null {
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fence?.[1] ?? text;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start === -1 || end === -1 || end < start) return null;
-  return candidate.slice(start, end + 1);
-}
 
 function addCost(a: number | null, b: number | null): number | null {
   if (a === null && b === null) return null;
@@ -47,13 +36,43 @@ export class StructuredLlmService {
     maxTokens: number = DEFAULT_MAX_OUTPUT_TOKENS,
   ): Promise<StructuredResult<T>> {
     const adapter = this.registry.get(byok.providerName);
-    const ask = (messages: ReadonlyArray<ChatMessage>) =>
-      adapter.complete(
-        { model: byok.model, system, messages, maxTokens, temperature: 0 },
-        byok.apiKey,
-      );
+    const useAnthropicStructured = byok.providerName === 'anthropic';
+    const responseFormat = useAnthropicStructured
+      ? { type: 'json_schema' as const, schema: zodToAnthropicJsonSchema(schema) }
+      : undefined;
 
-    const first = await ask([{ role: 'user', content: user }]);
+    const buildRequest = (
+      messages: ReadonlyArray<ChatMessage>,
+      withStructured: boolean,
+    ): CompletionRequest => ({
+      model: byok.model,
+      system,
+      messages,
+      maxTokens,
+      temperature: 0,
+      ...(withStructured && responseFormat
+        ? { responseFormat: { type: 'json_schema', schema: responseFormat.schema } }
+        : {}),
+    });
+
+    const ask = async (messages: ReadonlyArray<ChatMessage>, structured: boolean) => {
+      try {
+        return await adapter.complete(buildRequest(messages, structured), byok.apiKey);
+      } catch (error: unknown) {
+        if (
+          structured &&
+          useAnthropicStructured &&
+          error instanceof ProviderError &&
+          error.status === 400 &&
+          /schema|too complex|output_config|format/i.test(error.message)
+        ) {
+          return adapter.complete(buildRequest(messages, false), byok.apiKey);
+        }
+        throw error;
+      }
+    };
+
+    const first = await ask([{ role: 'user', content: user }], useAnthropicStructured);
     const firstParse = this.parse(schema, first.text);
     if (firstParse.ok) {
       return {
@@ -64,14 +83,16 @@ export class StructuredLlmService {
       };
     }
 
-    const repair = await ask([
-      { role: 'user', content: user },
-      { role: 'assistant', content: first.text },
-      {
-        role: 'user',
-        content: `That response was not valid: ${firstParse.error} Return ONLY a single JSON object — no prose, no markdown, no code fences.`,
-      },
-    ]);
+    // Single-turn repair avoids replaying assistant turns (required for Claude 4.8+).
+    const repair = await ask(
+      [
+        {
+          role: 'user',
+          content: `${user}\n\n---\nYour previous response was invalid: ${firstParse.error}\nReturn ONLY a single JSON object matching the requested fields. No prose, markdown, or code fences.`,
+        },
+      ],
+      useAnthropicStructured,
+    );
     const repairParse = this.parse(schema, repair.text);
     if (repairParse.ok) {
       return {
@@ -90,17 +111,10 @@ export class StructuredLlmService {
   }
 
   private parse<T>(schema: ZodType<T, ZodTypeDef, unknown>, text: string): ParseOutcome<T> {
-    const json = extractJsonBlock(text);
-    if (json === null) return { ok: false, error: 'No JSON object found in response.' };
+    const parsed = parseJsonObject(text);
+    if (!parsed.ok) return parsed;
 
-    let raw: unknown;
-    try {
-      raw = JSON.parse(json);
-    } catch {
-      return { ok: false, error: 'Response was not parseable JSON.' };
-    }
-
-    const result = schema.safeParse(raw);
+    const result = schema.safeParse(parsed.value);
     if (!result.success) {
       const detail = result.error.issues
         .slice(0, MAX_ERROR_ISSUES)
