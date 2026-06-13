@@ -16,7 +16,7 @@ const STRIPPED_KEYS = new Set([
 
 /** Convert a Zod schema to an Anthropic structured-output JSON Schema. */
 export function zodToAnthropicJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
-  const raw = zodToJsonSchema(schema, {
+  const raw = zodToJsonSchema(schema as never, {
     $refStrategy: 'none',
     target: 'openApi3',
   }) as Record<string, unknown>;
