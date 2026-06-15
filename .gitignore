@@ -39,3 +39,8 @@ test-results/
 
 # Local agent/tooling settings (machine-specific)
 .claude/settings.local.json
+
+# Large media (keep out of git — GitHub 100MB limit)
+*.mov
+*.mp4
+Screen Recording*

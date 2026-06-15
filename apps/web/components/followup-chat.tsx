@@ -1,17 +1,14 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { startReview, type ProviderConfig, type ContextItem } from '@/lib/api';
-import { loadProvider, saveProvider } from '@/lib/storage';
+import { FIXED_PROVIDER_CONFIG, startReview, type ContextItem } from '@/lib/api';
 import { buildFollowUp } from '@/lib/followup';
 import { assertContextWithinLimit, resolveContextItems } from '@/lib/context-submit';
-import { ProviderSwitcher } from '@/components/provider-switcher';
 import {
   ContextAttachments,
   type PendingContextItem,
 } from '@/components/context-attachments';
-import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_PROVIDER } from '@dgb/shared';
 import StarBorder from '@/components/ui/StarBorder';
 import FadeContent from '@/components/ui/FadeContent';
 
@@ -34,16 +31,8 @@ export function FollowUpChat({
   const [message, setMessage] = useState('');
   const [newLinks, setNewLinks] = useState<ContextItem[]>([]);
   const [pendingFiles, setPendingFiles] = useState<PendingContextItem[]>([]);
-  const [provider, setProvider] = useState<ProviderConfig>({
-    providerName: DEFAULT_PROVIDER,
-    model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
-  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setProvider(loadProvider());
-  }, []);
 
   async function onSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -52,13 +41,12 @@ export function FollowUpChat({
       setError('Add the detail you want included before running again.');
       return;
     }
-    saveProvider(provider);
     setSubmitting(true);
     try {
-      const uploaded = await resolveContextItems(newLinks, pendingFiles, provider);
+      const uploaded = await resolveContextItems(newLinks, pendingFiles, FIXED_PROVIDER_CONFIG);
       const followUp = buildFollowUp(originalText, contextItems, message.trim(), uploaded);
       assertContextWithinLimit(followUp.contextItems);
-      const runId = await startReview(followUp.text, provider, followUp.contextItems);
+      const runId = await startReview(followUp.text, FIXED_PROVIDER_CONFIG, followUp.contextItems);
       router.push(`/review/${runId}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to start the review.');
@@ -92,8 +80,7 @@ export function FollowUpChat({
               readOnlyExisting
               disabled={submitting}
             />
-            <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border)] pt-3 sm:flex-row sm:items-center sm:justify-between">
-              <ProviderSwitcher value={provider} onChange={setProvider} />
+            <div className="mt-3 flex justify-end border-t border-[var(--border)] pt-3">
               <StarBorder
                 type="submit"
                 disabled={submitting}

@@ -1,4 +1,11 @@
-import type { TraceEvent, ReviewOutput, ContextItem, AttachmentUpload } from '@dgb/shared';
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER,
+  type TraceEvent,
+  type ReviewOutput,
+  type ContextItem,
+  type AttachmentUpload,
+} from '@dgb/shared';
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ??
@@ -10,6 +17,12 @@ export interface ProviderConfig {
   providerName: string;
   model: string;
 }
+
+/** Fixed provider for all reviews (UI does not expose provider selection). */
+export const FIXED_PROVIDER_CONFIG: ProviderConfig = {
+  providerName: DEFAULT_PROVIDER,
+  model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
+};
 
 /** @deprecated Use ProviderConfig */
 export type Byok = ProviderConfig;

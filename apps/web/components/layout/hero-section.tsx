@@ -2,8 +2,6 @@
 
 import { memo, useState, type FormEvent } from 'react';
 import { BrandTitle } from '@/components/layout/brand-title';
-import { ProviderSwitcher } from '@/components/provider-switcher';
-import type { ProviderConfig } from '@/lib/api';
 import type { ContextItem } from '@dgb/shared';
 import {
   ContextAttachments,
@@ -31,16 +29,12 @@ const HeroThreadsBackground = memo(function HeroThreadsBackground() {
 });
 
 interface HeroDecisionFormProps {
-  provider: ProviderConfig;
-  onProviderChange: (provider: ProviderConfig) => void;
   onSubmit: (text: string, contextItems: ContextItem[], pendingFiles: PendingContextItem[]) => void | Promise<void>;
   submitting: boolean;
   error: string | null;
 }
 
 function HeroDecisionForm({
-  provider,
-  onProviderChange,
   onSubmit,
   submitting,
   error,
@@ -77,8 +71,7 @@ function HeroDecisionForm({
               onPendingFilesChange={setPendingFiles}
               disabled={submitting}
             />
-            <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border)] pt-3 sm:flex-row sm:items-center sm:justify-between">
-              <ProviderSwitcher value={provider} onChange={onProviderChange} />
+            <div className="mt-3 flex justify-end border-t border-[var(--border)] pt-3">
               <StarBorder
                 type="submit"
                 disabled={submitting}
@@ -97,16 +90,12 @@ function HeroDecisionForm({
 }
 
 interface HeroSectionProps {
-  provider: ProviderConfig;
-  onProviderChange: (provider: ProviderConfig) => void;
   onSubmit: (text: string, contextItems: ContextItem[], pendingFiles: PendingContextItem[]) => void | Promise<void>;
   submitting: boolean;
   error: string | null;
 }
 
 export function HeroSection({
-  provider,
-  onProviderChange,
   onSubmit,
   submitting,
   error,
@@ -138,8 +127,6 @@ export function HeroSection({
         </div>
 
         <HeroDecisionForm
-          provider={provider}
-          onProviderChange={onProviderChange}
           onSubmit={onSubmit}
           submitting={submitting}
           error={error}

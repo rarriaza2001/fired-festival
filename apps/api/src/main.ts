@@ -1,9 +1,13 @@
 import 'reflect-metadata';
+import { resolve } from 'node:path';
+import { config as loadDotenv } from 'dotenv';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { JsonLogger } from './logger/json-logger';
 import { loadEnv } from './config/env';
 import { startTelemetry, shutdownTelemetry } from './telemetry/telemetry.sdk';
+
+loadDotenv({ path: resolve(__dirname, '../.env') });
 
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
