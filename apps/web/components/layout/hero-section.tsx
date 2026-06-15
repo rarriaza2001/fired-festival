@@ -61,7 +61,7 @@ function HeroDecisionForm({
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={3}
-              placeholder="Describe the decision you're about to make…"
+              placeholder="Describe your startup idea…"
               className="chat-bar-input min-h-[88px] resize-none border-0 bg-transparent text-base leading-relaxed shadow-none focus:ring-0 md:text-lg"
             />
             <ContextAttachments
